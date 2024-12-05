@@ -11,3 +11,13 @@ Se trata del archivo Rmd que contiene todos los datasets utilizados para poder c
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # storytelling_Fluorish
 Se trata de un archivo TXT que contiene el enlace al storytelling visto en el video.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Bibliografía
+Bibliografía externa a la asignatura utilizada para la realización de esta PEC:
+- https://datos.bancomundial.org/indicador/NY.GDP.PCAP.CD?end=2017&start=2015 (Para el PIB per capita)
+- https://rpubs.com/joaquin/dintab
+- https://cran.r-project.org/web/packages/geosphere/geosphere.pdf
+- https://r-coder.com/leer-excel-r/#google_vignette
+- https://rpubs.com/jboscomendoza/importar_hojas_calculo_excel_r_readxl
+- https://rpubs.com/hllinas/R_Filtrar_DataFrames

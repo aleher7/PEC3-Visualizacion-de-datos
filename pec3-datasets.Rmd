@@ -1,0 +1,298 @@
+---
+title: "PEC3 - Reservas y Cancelaciones: Decisiones que transforman la industria hotelera"
+output: html_document
+date: "2024-11-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+El storytelling propuesto busca presentar las dinámicas de cancelaciones y los patrones de gasto en la actividad hotelera, con un enfásis en cómo el análisis de datos puede ayudar a optimizar estrategias de revenue management y marketing.
+
+## Cargar packages necesarios
+
+```{r packages}
+library("ggmosaic")
+library("ggplot2")
+library("fitdistrplus")
+library("MASS")
+library("survival")
+library("ggstatsplot")
+library("tidyverse")
+library("lubridate")
+library("readxl") # Esta librería se ha añadido para poder leer un dataset externo necesario para la creación del dataset combinado del mapa de calor.
+library("geosphere") # Esta librería se ha añadido para poder calcular distancias entre los países. Concretamente, para calcular la distancia entre Portugal y los demás países.
+library("readr") # Esta librería se ha añadido para poder leer un dataset externo de PIB por capita.
+```
+
+## Data loading and dimensions (N x M)
+
+Leemos el fichero de datos en formato CSV, tiene 119,390 filas y 32 columnas:
+
+```{r load data}
+x=read.csv("hotel_bookings.csv", stringsAsFactors = T)
+dim(x)
+```
+
+## Data cleansing
+
+Primero inspeccionaremos los datos usando la función summary() incluída en R. La explicación de cada variable se puede encontrar en el artículo en el cual se describe este conjunto de datos de forma detallada, aunque los nombres de las variables son casi auto-explicativos:
+
+```{r summary, echo=FALSE}
+summary(x)
+```
+
+# Limpieza de datos
+
+A continuación, procederemos a eliminar valores extremos y corregir datos para asegurar un storytelling claro:
+
+```{r}
+
+# Eliminamos las reservas sin huéspedes
+x <- x %>%
+  filter(adults > 0 & (adults + children + babies) > 0)
+
+# Corregimos los valores extremos en adr (Average Daily Rate)
+x <- x %>%
+  filter(adr >= 0 & adr < 1000)
+
+# Reemplazamos NA en children por 0
+x$children[is.na(x$children)] <- 0
+```
+
+## Creación de variables derivadas
+
+Procedemos a enriquecer el dataset, añadiendo columnas como la variable fecha, como se ha visto en el archivo Rmd de ejemplo.
+
+```{r}
+
+# Creamos la variable de fecha
+x$arrival_date <- as_date(paste0(x$arrival_date_year,'-',x$arrival_date_month,'-',x$arrival_date_day_of_month))
+
+# Creamos el indicador de reservas localas vs extranjeras
+x$local_guest <- ifelse(x$country == "PRT", "Local", "Extranjeros")
+```
+
+# Generación de tablas para visualizaciones
+
+Ahora, crearemos las tablas necesarias para generar los gráficos en Fluorish.
+
+## Mapa de calor: Tasas de cancelación por país de origen
+
+```{r}
+# Dataset de cancelaciones por país
+cancel_rate <- x %>%
+  group_by(country) %>%
+  summarise(
+    total_reservations = n(),
+    cancellations = sum(as.numeric(is_canceled)),
+    cancel_rate = round((cancellations / total_reservations) * 100, 2)
+  ) %>%
+  arrange(desc(cancel_rate))
+
+# Leemos el archivo Excel con datos de países
+countries_info <- read_excel("paises_abreviaturas.xlsx")
+
+# Renombramos la columna de abreviaturas en el archivo Excel para que coincida con el dataset de cancelaciones
+countries_info_rename <- countries_info %>%
+  rename(country = Abreviatura)
+
+# Combinamos ambos datasets usando la columna "country"
+merged_data <- left_join(cancel_rate, countries_info_rename, by = "country")
+
+# Guardamos el dataset combinado en un archivo CSV
+write.csv(merged_data, "merged_cancel_rate_with_coordinates.csv", row.names = FALSE)
+```
+
+## Gráfico de barras: Comparación de cancelaciones entre locales y extranjeros
+
+```{r}
+# Categorización de reservas por temporada
+x1 <- x %>%
+  mutate(
+    arrival_date_month = as.character(arrival_date_month),
+    season = case_when(
+    arrival_date_month %in% c("June", "July", "August") ~ "High Season",
+    arrival_date_month %in% c("December", "January", "February") ~ "Holiday Season",
+    TRUE ~ "Low Season"
+  ))
+  
+# Resumen de las cancelaciones por origen y temporada
+origin_cancellation <- x1 %>%
+  mutate(origin = ifelse(country == "PRT", "Local", "Foreigner")) %>%
+  group_by(origin, season) %>%
+  summarise(
+    total_reservations = n(),
+    cancellations = sum(as.numeric(is_canceled)),
+    cancel_rate = round((cancellations / total_reservations) * 100, 2)
+  )
+
+# Exportamos para Fluorish
+write.csv(origin_cancellation, "origin_cancellation.csv", row.names = FALSE)
+```
+
+## Gráfico de violin: ADR por tipo de hotel y estado de reserva
+
+```{r}
+# Dataset de adr por tipo de hotel y el estado de reserva, si se encuentra cancelada o no.
+# Se escoge un rango razonable para poder realizar de manera correcta la gráfica de violín (entre 0 y 300)
+adr_data <- x %>%
+  filter(adr > 0 & adr < 300) %>%
+  select(hotel, is_canceled, adr)
+
+# Debido a la extensa lista de registros, se puede seleccionar una fracción o número fijo de datos de forma aleatoria para reducir el tamaño pero que se mantegna la representatividad.
+sample_data <- adr_data %>%
+  sample_frac(0.1)
+
+# Exportamos para Fluorish
+write.csv(sample_data, "adr_by_hotel_cancellation.csv", row.names = FALSE)
+```
+
+## Gráfico de líneas: Evolución mensual de tasas de cancelación
+
+```{r}
+# Creamos la columna de mes y año
+x <- x %>%
+  mutate(
+    month_year = format(as.Date(arrival_date), "%Y-%m") # Extraemos el año y el mes
+  )
+
+# Calculamos tasa de cancelación mensual
+monthly_cancellation <- x %>%
+  group_by(month_year) %>%
+  summarise(
+    total_reservations = n(),
+    cancellations = sum(as.numeric(is_canceled)),
+    cancel_rate = round((cancellations / total_reservations) * 100, 2)
+  )
+
+#monthly_cancellation <- monthly_cancellation %>%
+#  pivot_longer(cols = c(total_reservations, cancellations, cancel_rate),
+#               names_to = "metric",
+#               values_to = "value") %>%
+#  pivot_wider(names_from = month_year, values_from = value)
+  
+# Exportamos para Fluorish
+write.csv(monthly_cancellation, 'monthly_cancellation_rate.csv', row.names = FALSE)
+```
+
+## Scatterplot: Relación entre Lead Time y ADR
+
+```{r}
+# Filtramos y preparamos los datos
+scatter_data <- x %>%
+  filter(lead_time >= 0, adr > 0) %>%
+  select(lead_time, adr, is_canceled)
+
+# Añadimos el número de reservas para cada combinación de lead_time y adr, además de calcular el promedio de cancelaciones para cada número de reservas
+scatter_data <- scatter_data %>%
+  group_by(lead_time, adr) %>%
+  summarise(
+    cancel_rate_mean = mean(as.numeric(is_canceled), na.rm = TRUE),
+    total_reservations = n()
+  ) %>%
+  ungroup()
+
+# Filtramos valores extremos para lead_time y adr
+filtered_data <- scatter_data %>%
+  filter(lead_time <= 400, adr <= 500)
+
+# Debido a la extensa lista de registros, se puede seleccionar una fracción o número fijo de datos de forma aleatoria para reducir el tamaño pero que se mantegna la representatividad.
+sample_data <- scatter_data %>%
+  sample_frac(0.1)
+
+# Exportamos para Fluorish
+write.csv(sample_data, 'leadtime_vs_adr.csv', row.names = FALSE)
+```
+
+## Distancias entre Portugal y otros países
+
+```{r}
+# A partir del dataset 'countries_info' obtenemos la latitud y longitud de cada país, teniendo en cuenta la capital de este.
+
+# Coordenadas de Lisboa, Portugal
+lisbon_coords <- c(-9.13552, 38.7072) # Longitud y latitud
+
+# Calculamos las distancias desde cada país hasta Lisboa
+# Usaremos la función distHaversine sacada de la librería geosphere para calcular la distancia entre Portugal y los diferentes países, debido a que nos ayuda a calcular la distancia en línea recta entre dos puntos en la superficie de una esfera.
+countries_info_distances <- countries_info %>%
+  mutate(distance_to_portugal = distHaversine( 
+    cbind(Longitude, Latitude),
+    lisbon_coords
+  ) / 1000) # Convertimos metros a kilometros
+
+# Exportamos para Fluorish
+write.csv(countries_info_distances, 'countries_portugal_distances.csv', row.names = FALSE)
+```
+
+## Obtener datos de PIB por Capita de cada país
+
+```{r}
+# Leemos datos de PIB per capita de la fuente: https://datos.bancomundial.org/indicador/NY.GDP.PCAP.CD?end=2017&start=2015
+pib_data <- read_excel("pib_per_capita.xlsx")
+
+# Leemos los datos del excel de distancias
+distances_data <- read_csv("countries_portugal_distances.csv")
+
+# Cogeremos solos los años 2015, 2016 y 2017 debido a que son los años que tenemos en los registros del dataset original de la PEC.
+pib_data_filtered <- pib_data[, c("Country Name","2015","2016","2017")]
+
+# Renombramos las columnas para que coincidan con el dataset de distancias
+pib_data_filtered <- pib_data_filtered %>%
+  rename(
+    País = "Country Name",
+    PIB_2015 = "2015",
+    PIB_2016 = "2016",
+    PIB_2017 = "2017"
+  )
+
+# Combinamos ambos dataset, donde tendremos en cuenta los países que aparecen en el dataset de 'distances_data'
+merged_data <- merge(pib_data_filtered, distances_data, by = "País", all.y = TRUE)
+
+# Exportamos para Fluorish
+write.csv(merged_data, 'pib_countries_2015_2017.csv', row.names = FALSE)
+```
+
+## Combinar PIB y distancia de cada país con el número de reservas en los años 2015, 2016 y 2017
+
+```{r}
+
+# Leemos el dataset de PIB por capita
+pib_data <- read.csv("pib_countries_2015_2017.csv")
+
+# Asignamos un nuevo nombre al dataset de hotel_bookings
+hotel_booking_data <- x
+
+# Convertimos el año a formato numérico para ahorrarnos problemas posteriores
+hotel_booking_data$arrival_date_year <- as.numeric(hotel_booking_data$arrival_date_year)
+
+# Agrupamos y resumimos los datos de hotel_bookings por país y año
+hotel_booking_summary <- hotel_booking_data %>%
+  group_by(country, arrival_date_year) %>%
+  summarise(
+    total_reservations = n(),
+    cancellations = sum(as.numeric(is_canceled), na.rm = TRUE),
+    cancel_rate = round((cancellations / total_reservations) * 100, 2)
+  ) %>%
+  ungroup()
+
+# Transformamos los adtos para que los años sean columnas
+hotel_booking_summary_transformed <- hotel_booking_summary %>%
+  pivot_wider(
+    names_from = arrival_date_year,
+    values_from = c(total_reservations, cancellations, cancel_rate),
+    names_glue = "{.value}_{arrival_date_year}"
+  )
+
+# Unimos el dataset de PIB con el resumen de reservas
+merged_data <- pib_data %>%
+  left_join(hotel_booking_summary_transformed, by = c("Abreviatura" = "country"))
+
+# Debido a la gran cantidad de datos que hay, se cogerán los países con más de 10 reservas hechas, con tasas de cancelación superior a 20 o un PIB superior a 20.000.
+merged_data <- merged_data %>%
+  filter(total_reservations_2017 > 10, cancel_rate_2017 > 20 | PIB_2017 > 20000)
+
+# Exportamos para Fluorish
+write.csv(merged_data, 'pib_with_booking_data.csv', row.names = FALSE)
+```
